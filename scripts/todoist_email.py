@@ -1,16 +1,5 @@
 """
-todoist_email.py
-Obtiene tareas de Todoist con etiquetas @Hoy, @Esta_semana y @Deadline
-(las de @Deadline filtradas por su campo 'deadline.date', próximos 30 días)
-y envía un resumen por correo vía SMTP de Gmail.
-
-Usa la Todoist API v1 (la REST v2 está deprecated desde finales de 2025).
-
-Variables de entorno requeridas:
-  TODOIST_API_TOKEN  — token de la API de Todoist
-  GMAIL_USER         — tu dirección Gmail (remitente)
-  GMAIL_APP_PASSWORD — contraseña de aplicación de Gmail
-  TO_EMAIL           — destinatario (puede ser el mismo Gmail)
+todoist_email.py (corregido)
 """
 
 import os
@@ -29,33 +18,41 @@ GMAIL_USER         = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TO_EMAIL           = os.environ["TO_EMAIL"]
 
-# API v1 (REST v2 deprecated)
-TODOIST_BASE = "https://api.todoist.com/api/v1"
+TODOIST_BASE = "https://api.todoist.com/rest/v2"
 HEADERS      = {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
 
 LABEL_HOY         = "Hoy"
 LABEL_ESTA_SEMANA = "Esta_semana"
 LABEL_DEADLINE    = "Deadline"
 
-DEADLINE_DAYS = 30   # ventana para @Deadline
+DEADLINE_DAYS = 30
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def get_tasks_by_label(label: str) -> list[dict]:
-    """Devuelve todas las tareas activas con una etiqueta dada."""
+    """Obtiene tareas usando filtro por nombre de etiqueta."""
     resp = requests.get(
         f"{TODOIST_BASE}/tasks",
         headers=HEADERS,
-        params={"label": label},
+        params={"filter": f"@{label}"},
         timeout=15,
     )
-    resp.raise_for_status()
-    return resp.json()
+
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        raise RuntimeError(f"Error HTTP Todoist: {resp.text}") from e
+
+    data = resp.json()
+
+    if not isinstance(data, list):
+        raise ValueError(f"Respuesta inesperada de Todoist: {data}")
+
+    return data
 
 
-def parse_due_date(task: dict) -> date | None:
-    """Extrae la *due date* (fecha programada / recordatorio) de una tarea."""
+def parse_due_date(task: dict):
     due = task.get("due")
     if not due:
         return None
@@ -63,14 +60,7 @@ def parse_due_date(task: dict) -> date | None:
     return date.fromisoformat(raw[:10]) if raw else None
 
 
-def parse_deadline_date(task: dict) -> date | None:
-    """
-    Extrae la *deadline date* de una tarea.
-
-    Todoist distingue 'due' (fecha programada) de 'deadline' (fecha límite real).
-    El campo 'deadline' es un objeto separado: {"date": "YYYY-MM-DD", "lang": "es"}.
-    Para las tareas con @Deadline usamos exclusivamente task['deadline']['date'].
-    """
+def parse_deadline_date(task: dict):
     dl = task.get("deadline")
     if not dl:
         return None
@@ -79,13 +69,13 @@ def parse_deadline_date(task: dict) -> date | None:
 
 
 def format_task_line(task: dict, date_fn=parse_due_date) -> str:
-    """Devuelve una línea HTML representando la tarea."""
     content  = task.get("content", "(sin título)")
     d        = date_fn(task)
     date_str = f" <span style='color:#888;font-size:13px;'>({d.strftime('%d %b')})</span>" if d else ""
     priority = task.get("priority", 1)
     dot      = {4: "🔴", 3: "🟠", 2: "🔵", 1: ""}.get(priority, "")
     url      = f"https://app.todoist.com/app/task/{task['id']}"
+
     return (
         f"<li style='margin-bottom:6px;'>"
         f"{dot} <a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{content}</a>"
@@ -93,9 +83,7 @@ def format_task_line(task: dict, date_fn=parse_due_date) -> str:
     )
 
 
-def build_section(title: str, tasks: list[dict], accent: str,
-                  date_fn=parse_due_date) -> str:
-    """Construye un bloque HTML para una sección del correo."""
+def build_section(title: str, tasks: list[dict], accent: str, date_fn=parse_due_date) -> str:
     if not tasks:
         items = "<li style='color:#888;'>Sin tareas</li>"
     else:
@@ -114,17 +102,12 @@ def build_section(title: str, tasks: list[dict], accent: str,
     """
 
 
-def build_email_html(
-    hoy:      list[dict],
-    semana:   list[dict],
-    deadline: list[dict],
-) -> str:
+def build_email_html(hoy, semana, deadline) -> str:
     today_str = date.today().strftime("%A, %d de %B de %Y")
 
-    sec_hoy    = build_section("📌 Hoy",        hoy,    "#c0392b")
+    sec_hoy    = build_section("📌 Hoy", hoy, "#c0392b")
     sec_semana = build_section("📅 Esta semana", semana, "#2980b9")
 
-    # Para @Deadline mostramos la deadline date, no la due date
     sec_deadline = build_section(
         f"⏳ Deadlines — próximos {DEADLINE_DAYS} días",
         sorted(deadline, key=lambda t: parse_deadline_date(t) or date.max),
@@ -161,8 +144,6 @@ def build_email_html(
     """
 
 
-# ── Envío de correo ────────────────────────────────────────────────────────────
-
 def send_email(subject: str, html_body: str) -> None:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -182,21 +163,20 @@ def main() -> None:
     cutoff = today + timedelta(days=DEADLINE_DAYS)
 
     print("Obteniendo tareas de Todoist…")
+
     tasks_hoy    = get_tasks_by_label(LABEL_HOY)
     tasks_semana = get_tasks_by_label(LABEL_ESTA_SEMANA)
     tasks_dl_raw = get_tasks_by_label(LABEL_DEADLINE)
 
-    # Filtrar @Deadline por deadline.date (no por due.date)
-    # Las que no tienen deadline date se incluyen igualmente
     tasks_deadline = [
         t for t in tasks_dl_raw
         if (d := parse_deadline_date(t)) is None or (today <= d <= cutoff)
     ]
 
     print(
-        f"  @Hoy: {len(tasks_hoy)} | "
+        f"@Hoy: {len(tasks_hoy)} | "
         f"@Esta_semana: {len(tasks_semana)} | "
-        f"@Deadline (próx. {DEADLINE_DAYS}d): {len(tasks_deadline)}"
+        f"@Deadline: {len(tasks_deadline)}"
     )
 
     html    = build_email_html(tasks_hoy, tasks_semana, tasks_deadline)
