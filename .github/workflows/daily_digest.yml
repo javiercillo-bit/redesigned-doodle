@@ -1,0 +1,51 @@
+# .github/workflows/daily_digest.yml
+#
+# Envía un resumen diario de Todoist a las ~9:00 AM hora Chile.
+#
+# SOBRE EL CRON Y LOS DELAYS DE GITHUB ACTIONS:
+# GitHub Actions no garantiza ejecución exacta a la hora indicada.
+# En base a observaciones reales, los delays pueden ser de 15min a 4+ horas,
+# especialmente en horarios UTC "redondos" con alta demanda (03:00, 06:00, etc.).
+#
+# Estrategia aplicada:
+#   - Chile verano (UTC-3, oct–mar): 9:00 AM = 12:00 UTC
+#   - Chile invierno (UTC-4, abr–sep): 9:00 AM = 13:00 UTC
+#   - Con delays observados de ~3:45h, programamos a las 08:00 UTC
+#     → ejecución real estimada: 11:45 UTC ≈ 8:45 AM Chile verano
+#   - Si los delays bajan a 30–60 min en tu franja horaria, llegará antes
+#     de las 9 AM. Ajusta el cron hacia adelante según vayas observando.
+#
+# Para confirmar la hora real de ejecución, revisa la pestaña "Actions"
+# en GitHub y mira el timestamp de cada run.
+
+name: Daily Todoist Digest
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC → ~9 AM Chile con delay típico de ~1-4h
+  workflow_dispatch:         # permite ejecutar manualmente desde la UI de Actions
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run digest script
+        env:
+          TODOIST_API_TOKEN:  ${{ secrets.TODOIST_API_TOKEN }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TO_EMAIL:           ${{ secrets.TO_EMAIL }}
+        run: python scripts/todoist_email.py
