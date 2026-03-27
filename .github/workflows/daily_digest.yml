@@ -2,27 +2,24 @@
 #
 # Envía un resumen diario de Todoist a las ~9:00 AM hora Chile.
 #
-# SOBRE EL CRON Y LOS DELAYS DE GITHUB ACTIONS:
-# GitHub Actions no garantiza ejecución exacta a la hora indicada.
-# En base a observaciones reales, los delays pueden ser de 15min a 4+ horas,
-# especialmente en horarios UTC "redondos" con alta demanda (03:00, 06:00, etc.).
+# NOTA SOBRE EL CRON:
+# Según el log del 2026-03-27, el workflow se ejecutó a las 03:38 UTC
+# con cron "0 3 * * *" — es decir, delay de sólo ~38 minutos ese día.
+# Eso equivale a las 00:38 AM Chile (UTC-3), que es muy temprano.
 #
-# Estrategia aplicada:
-#   - Chile verano (UTC-3, oct–mar): 9:00 AM = 12:00 UTC
-#   - Chile invierno (UTC-4, abr–sep): 9:00 AM = 13:00 UTC
-#   - Con delays observados de ~3:45h, programamos a las 08:00 UTC
-#     → ejecución real estimada: 11:45 UTC ≈ 8:45 AM Chile verano
-#   - Si los delays bajan a 30–60 min en tu franja horaria, llegará antes
-#     de las 9 AM. Ajusta el cron hacia adelante según vayas observando.
+# Para llegar a las 9:00 AM Chile (UTC-3 en verano), necesitamos 12:00 UTC.
+# Con un delay observado de ~40 min, ponemos el cron a las 11:00 UTC
+# → ejecución real estimada: ~11:40–12:00 UTC = ~8:40–9:00 AM Chile.
 #
-# Para confirmar la hora real de ejecución, revisa la pestaña "Actions"
-# en GitHub y mira el timestamp de cada run.
+# Ajusta el cron si ves que llega muy temprano o muy tarde:
+#   - Muy temprano → cambia "0 11" a "0 12"
+#   - Muy tarde    → cambia "0 11" a "0 10"
 
 name: Daily Todoist Digest
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # 08:00 UTC → ~9 AM Chile con delay típico de ~1-4h
+    - cron: "0 11 * * *"   # 11:00 UTC + ~40 min delay ≈ 9:00 AM Chile (UTC-3)
   workflow_dispatch:         # permite ejecutar manualmente desde la UI de Actions
 
 jobs:
