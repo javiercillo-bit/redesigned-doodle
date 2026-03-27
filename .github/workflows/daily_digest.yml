@@ -19,7 +19,7 @@ name: Daily Todoist Digest
 
 on:
   schedule:
-    - cron: "0 11 * * *"   # 11:00 UTC + ~40 min delay ≈ 9:00 AM Chile (UTC-3)
+    - cron: "0 8 * * *"   # 11:00 UTC + ~40 min delay ≈ 9:00 AM Chile (UTC-3)
   workflow_dispatch:         # permite ejecutar manualmente desde la UI de Actions
 
 jobs:
