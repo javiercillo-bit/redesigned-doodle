@@ -1,10 +1,7 @@
-"""
-todoist_email.py (corregido)
-"""
-
 import os
 import smtplib
 import sys
+import json
 from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -18,7 +15,7 @@ GMAIL_USER         = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TO_EMAIL           = os.environ["TO_EMAIL"]
 
-TODOIST_BASE = "https://api.todoist.com/rest/v2"
+TODOIST_BASE = "https://api.todoist.com/api/v1"
 HEADERS      = {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
 
 LABEL_HOY         = "Hoy"
@@ -26,31 +23,64 @@ LABEL_ESTA_SEMANA = "Esta_semana"
 LABEL_DEADLINE    = "Deadline"
 
 DEADLINE_DAYS = 30
+CACHE_FILE    = "label_cache.json"
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── API helpers ────────────────────────────────────────────────────────────────
 
-def get_tasks_by_label(label: str) -> list[dict]:
-    """Obtiene tareas usando filtro por nombre de etiqueta."""
+def fetch_labels_map() -> dict[str, str]:
+    """Obtiene labels desde API"""
+    resp = requests.get(
+        f"{TODOIST_BASE}/labels",
+        headers=HEADERS,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    if not isinstance(data, list):
+        raise ValueError(f"Respuesta inesperada labels: {data}")
+
+    return {label["name"]: label["id"] for label in data}
+
+
+def load_labels_map() -> dict[str, str]:
+    """Carga cache o consulta API si no existe"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            print("Cache corrupto, regenerando…")
+
+    labels = fetch_labels_map()
+    save_labels_map(labels)
+    return labels
+
+
+def save_labels_map(labels: dict[str, str]):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(labels, f)
+
+
+def get_tasks_by_label_id(label_id: str) -> list[dict]:
     resp = requests.get(
         f"{TODOIST_BASE}/tasks",
         headers=HEADERS,
-        params={"filter": f"@{label}"},
+        params={"label_id": label_id},
         timeout=15,
     )
-
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError as e:
-        raise RuntimeError(f"Error HTTP Todoist: {resp.text}") from e
+    resp.raise_for_status()
 
     data = resp.json()
 
     if not isinstance(data, list):
-        raise ValueError(f"Respuesta inesperada de Todoist: {data}")
+        raise ValueError(f"Respuesta inesperada tasks: {data}")
 
     return data
 
+
+# ── Parsing ────────────────────────────────────────────────────────────────────
 
 def parse_due_date(task: dict):
     due = task.get("due")
@@ -68,88 +98,27 @@ def parse_deadline_date(task: dict):
     return date.fromisoformat(raw[:10]) if raw else None
 
 
+# ── Render ─────────────────────────────────────────────────────────────────────
+
 def format_task_line(task: dict, date_fn=parse_due_date) -> str:
     content  = task.get("content", "(sin título)")
     d        = date_fn(task)
-    date_str = f" <span style='color:#888;font-size:13px;'>({d.strftime('%d %b')})</span>" if d else ""
+    date_str = f" ({d.strftime('%d %b')})" if d else ""
     priority = task.get("priority", 1)
     dot      = {4: "🔴", 3: "🟠", 2: "🔵", 1: ""}.get(priority, "")
     url      = f"https://app.todoist.com/app/task/{task['id']}"
 
-    return (
-        f"<li style='margin-bottom:6px;'>"
-        f"{dot} <a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{content}</a>"
-        f"{date_str}</li>"
-    )
+    return f"{dot} {content}{date_str} → {url}"
 
 
-def build_section(title: str, tasks: list[dict], accent: str, date_fn=parse_due_date) -> str:
-    if not tasks:
-        items = "<li style='color:#888;'>Sin tareas</li>"
-    else:
-        items = "\n".join(format_task_line(t, date_fn=date_fn) for t in tasks)
+# ── Email ──────────────────────────────────────────────────────────────────────
 
-    return f"""
-    <div style='margin-bottom:24px;'>
-      <h2 style='font-size:15px;font-weight:600;color:{accent};
-                 border-bottom:2px solid {accent};padding-bottom:4px;margin:0 0 10px;'>
-        {title}
-      </h2>
-      <ul style='margin:0;padding-left:18px;font-size:14px;line-height:1.7;'>
-        {items}
-      </ul>
-    </div>
-    """
-
-
-def build_email_html(hoy, semana, deadline) -> str:
-    today_str = date.today().strftime("%A, %d de %B de %Y")
-
-    sec_hoy    = build_section("📌 Hoy", hoy, "#c0392b")
-    sec_semana = build_section("📅 Esta semana", semana, "#2980b9")
-
-    sec_deadline = build_section(
-        f"⏳ Deadlines — próximos {DEADLINE_DAYS} días",
-        sorted(deadline, key=lambda t: parse_deadline_date(t) or date.max),
-        "#8e44ad",
-        date_fn=parse_deadline_date,
-    )
-
-    total = len(hoy) + len(semana) + len(deadline)
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang='es'>
-    <head><meta charset='UTF-8'></head>
-    <body style='font-family:sans-serif;background:#f5f5f5;margin:0;padding:20px;'>
-      <div style='max-width:560px;margin:auto;background:#fff;
-                  border-radius:8px;padding:28px 32px;box-shadow:0 1px 4px rgba(0,0,0,.08);'>
-
-        <p style='font-size:12px;color:#aaa;margin:0 0 4px;text-transform:uppercase;
-                  letter-spacing:.05em;'>Resumen diario · Todoist</p>
-        <h1 style='font-size:20px;font-weight:700;margin:0 0 20px;color:#111;'>
-          {today_str}
-        </h1>
-
-        {sec_hoy}
-        {sec_semana}
-        {sec_deadline}
-
-        <p style='font-size:12px;color:#bbb;margin:24px 0 0;text-align:center;'>
-          {total} tarea{'s' if total != 1 else ''} en total · generado automáticamente
-        </p>
-      </div>
-    </body>
-    </html>
-    """
-
-
-def send_email(subject: str, html_body: str) -> None:
-    msg = MIMEMultipart("alternative")
+def send_email(subject: str, body: str):
+    msg = MIMEMultipart()
     msg["Subject"] = subject
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = TO_EMAIL
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    msg["From"] = GMAIL_USER
+    msg["To"] = TO_EMAIL
+    msg.attach(MIMEText(body, "plain", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
@@ -158,38 +127,63 @@ def send_email(subject: str, html_body: str) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main():
+    print("Cargando labels…")
+    labels_map = load_labels_map()
+
+    def get_label_id(name: str) -> str:
+        if name not in labels_map:
+            print(f"Label '{name}' no encontrado en cache. Refrescando…")
+            labels_map.update(fetch_labels_map())
+            save_labels_map(labels_map)
+
+        if name not in labels_map:
+            raise RuntimeError(f"Label inexistente en Todoist: {name}")
+
+        return labels_map[name]
+
+    hoy_id    = get_label_id(LABEL_HOY)
+    semana_id = get_label_id(LABEL_ESTA_SEMANA)
+    dl_id     = get_label_id(LABEL_DEADLINE)
+
+    print("Obteniendo tareas…")
+    tasks_hoy    = get_tasks_by_label_id(hoy_id)
+    tasks_semana = get_tasks_by_label_id(semana_id)
+    tasks_dl_raw = get_tasks_by_label_id(dl_id)
+
     today  = date.today()
     cutoff = today + timedelta(days=DEADLINE_DAYS)
-
-    print("Obteniendo tareas de Todoist…")
-
-    tasks_hoy    = get_tasks_by_label(LABEL_HOY)
-    tasks_semana = get_tasks_by_label(LABEL_ESTA_SEMANA)
-    tasks_dl_raw = get_tasks_by_label(LABEL_DEADLINE)
 
     tasks_deadline = [
         t for t in tasks_dl_raw
         if (d := parse_deadline_date(t)) is None or (today <= d <= cutoff)
     ]
 
-    print(
-        f"@Hoy: {len(tasks_hoy)} | "
-        f"@Esta_semana: {len(tasks_semana)} | "
-        f"@Deadline: {len(tasks_deadline)}"
-    )
+    body = f"""
+Hoy: {len(tasks_hoy)}
+Esta semana: {len(tasks_semana)}
+Deadline: {len(tasks_deadline)}
 
-    html    = build_email_html(tasks_hoy, tasks_semana, tasks_deadline)
-    subject = f"📋 Todoist · {today.strftime('%d %b %Y')}"
+--- HOY ---
+{chr(10).join(format_task_line(t) for t in tasks_hoy)}
 
-    print(f"Enviando correo a {TO_EMAIL}…")
-    send_email(subject, html)
-    print("✓ Correo enviado.")
+--- SEMANA ---
+{chr(10).join(format_task_line(t) for t in tasks_semana)}
+
+--- DEADLINE ---
+{chr(10).join(format_task_line(t, parse_deadline_date) for t in tasks_deadline)}
+"""
+
+    subject = f"Todoist {today.strftime('%d %b %Y')}"
+
+    print("Enviando correo…")
+    send_email(subject, body)
+    print("OK")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
