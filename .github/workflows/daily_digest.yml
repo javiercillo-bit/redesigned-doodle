@@ -1,20 +1,3 @@
-# .github/workflows/daily_digest.yml
-#
-# Envía un resumen diario de Todoist a las ~9:00 AM hora Chile.
-#
-# NOTA SOBRE EL CRON:
-# Según el log del 2026-03-27, el workflow se ejecutó a las 03:38 UTC
-# con cron "0 3 * * *" — es decir, delay de sólo ~38 minutos ese día.
-# Eso equivale a las 00:38 AM Chile (UTC-3), que es muy temprano.
-#
-# Para llegar a las 9:00 AM Chile (UTC-3 en verano), necesitamos 12:00 UTC.
-# Con un delay observado de ~40 min, ponemos el cron a las 11:00 UTC
-# → ejecución real estimada: ~11:40–12:00 UTC = ~8:40–9:00 AM Chile.
-#
-# Ajusta el cron si ves que llega muy temprano o muy tarde:
-#   - Muy temprano → cambia "0 11" a "0 12"
-#   - Muy tarde    → cambia "0 11" a "0 10"
-
 name: Daily Todoist Digest
 
 on:
