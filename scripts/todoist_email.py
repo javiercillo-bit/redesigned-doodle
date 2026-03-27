@@ -139,12 +139,27 @@ def build_section(title: str, tasks: list[dict], accent: str,
     """
 
 
+DIAS_ES = {
+    "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+    "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
+}
+MESES_ES = {
+    "January": "enero", "February": "febrero", "March": "marzo",
+    "April": "abril", "May": "mayo", "June": "junio",
+    "July": "julio", "August": "agosto", "September": "septiembre",
+    "October": "octubre", "November": "noviembre", "December": "diciembre",
+}
+
+
 def build_email_html(
     hoy:      list[dict],
     semana:   list[dict],
     deadline: list[dict],
 ) -> str:
-    today_str = date.today().strftime("%A, %d de %B de %Y")
+    today = date.today()
+    dia   = DIAS_ES[today.strftime("%A")]
+    mes   = MESES_ES[today.strftime("%B")]
+    today_str = f"{dia}, {today.day:02d} de {mes} de {today.year}"
 
     sec_hoy    = build_section("📌 Hoy",        hoy,    "#c0392b")
     sec_semana = build_section("📅 Esta semana", semana, "#2980b9")
